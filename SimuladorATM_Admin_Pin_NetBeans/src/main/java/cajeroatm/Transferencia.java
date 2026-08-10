@@ -28,6 +28,10 @@ public class Transferencia extends Transaccion {
         return "Transferencia";
     }
 
+    public Cuenta getCuentaDestino() {
+        return cuentaDestino;
+    }
+
     @Override
     public String generarComprobante() {
         return super.generarComprobante()

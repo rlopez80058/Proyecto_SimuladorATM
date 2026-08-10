@@ -14,7 +14,20 @@ public class CajeroAutomatico {
     public ResultadoOperacion iniciarSesion(String numeroTarjeta, String pin) {
         Tarjeta tarjeta = banco.buscarTarjeta(numeroTarjeta);
         Cliente cliente = banco.obtenerClientePorTarjeta(numeroTarjeta);
-        return sesion.validarPIN(tarjeta, cliente, pin);
+
+        boolean estabaBloqueada = tarjeta != null && tarjeta.estaBloqueada();
+
+        ResultadoOperacion resultado = sesion.validarPIN(tarjeta, cliente, pin);
+
+        if (tarjeta != null && !estabaBloqueada && tarjeta.estaBloqueada()) {
+            ResultadoOperacion guardado = banco.guardarBloqueoTarjeta(numeroTarjeta, true);
+
+            if (!guardado.isExito()) {
+                System.err.println(guardado.getMensaje());
+            }
+        }
+
+        return resultado;
     }
 
     public void seleccionarCuenta(Cuenta cuenta) {
@@ -22,16 +35,16 @@ public class CajeroAutomatico {
     }
 
     public ResultadoOperacion retirar(double monto) {
-        return new Retiro(sesion.getCuentaSeleccionada(), monto).ejecutar();
+        return banco.procesarRetiro(sesion.getCuentaSeleccionada(), monto);
     }
 
     public ResultadoOperacion depositar(double monto) {
-        return new Deposito(sesion.getCuentaSeleccionada(), monto).ejecutar();
+        return banco.procesarDeposito(sesion.getCuentaSeleccionada(), monto);
     }
 
     public ResultadoOperacion transferir(String numeroCuentaDestino, double monto) {
         Cuenta destino = banco.buscarCuenta(numeroCuentaDestino);
-        return new Transferencia(sesion.getCuentaSeleccionada(), destino, monto).ejecutar();
+        return banco.procesarTransferencia(sesion.getCuentaSeleccionada(), destino, monto);
     }
 
     public double consultarSaldo() {

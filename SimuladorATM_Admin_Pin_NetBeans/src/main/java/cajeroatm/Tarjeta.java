@@ -8,10 +8,14 @@ public class Tarjeta {
     private boolean vigente;
 
     public Tarjeta(String numero, String pin) {
+        this(numero, pin, false, true);
+    }
+
+    public Tarjeta(String numero, String pin, boolean bloqueada, boolean vigente) {
         this.numero = numero;
         this.pin = pin;
-        this.bloqueada = false;
-        this.vigente = true;
+        this.bloqueada = bloqueada;
+        this.vigente = vigente;
     }
 
     public boolean verificarPIN(String pinIngresado) {

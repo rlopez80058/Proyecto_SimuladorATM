@@ -19,6 +19,21 @@ public abstract class Transaccion {
         this.estado = "PENDIENTE";
     }
 
+    // Constructor usado al reconstruir el historial guardado en MySQL.
+    protected Transaccion(int id, LocalDateTime fechaHora, double monto,
+                          String estado, Cuenta cuentaOrigen) {
+        this.id = id;
+        this.fechaHora = fechaHora;
+        this.monto = monto;
+        this.estado = estado;
+        this.cuentaOrigen = cuentaOrigen;
+
+        // Evita que las transacciones nuevas reutilicen un consecutivo ya cargado.
+        if (id >= consecutivo) {
+            consecutivo = id + 1;
+        }
+    }
+
     public abstract boolean validar();
     protected abstract void aplicar();
     public abstract String getTipo();
@@ -26,7 +41,9 @@ public abstract class Transaccion {
     public ResultadoOperacion ejecutar() {
         if (!validar()) {
             estado = "RECHAZADA";
-            if (cuentaOrigen != null) cuentaOrigen.agregarTransaccion(this);
+            if (cuentaOrigen != null) {
+                cuentaOrigen.agregarTransaccion(this);
+            }
             return new ResultadoOperacion(false, "Operación rechazada: " + getTipo());
         }
 
@@ -52,7 +69,7 @@ public abstract class Transaccion {
     @Override
     public String toString() {
         DateTimeFormatter formato = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
-        return fechaHora.format(formato) + " | " + getTipo() + " | ₡" 
+        return fechaHora.format(formato) + " | " + getTipo() + " | ₡"
                 + String.format("%,.2f", monto) + " | " + estado;
     }
 }

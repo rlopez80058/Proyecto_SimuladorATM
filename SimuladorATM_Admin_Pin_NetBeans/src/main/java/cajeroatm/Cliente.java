@@ -11,9 +11,13 @@ public class Cliente {
     private List<Cuenta> cuentas;
 
     public Cliente(String identificacion, String nombre) {
+        this(identificacion, nombre, true);
+    }
+
+    public Cliente(String identificacion, String nombre, boolean activo) {
         this.identificacion = identificacion;
         this.nombre = nombre;
-        this.activo = true;
+        this.activo = activo;
         this.cuentas = new ArrayList<>();
     }
 

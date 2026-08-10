@@ -1,5 +1,12 @@
 package cajeroatm;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Timestamp;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -15,24 +22,318 @@ public class Banco {
         tarjetas = new LinkedHashMap<>();
         clientesPorTarjeta = new LinkedHashMap<>();
         cuentas = new LinkedHashMap<>();
-        cargarDatosDePrueba();
+        cargarDatosDesdeBD();
     }
 
-    private void cargarDatosDePrueba() {
-        Cliente cliente1 = new Cliente("1-1111-1111", "Nelson Rodríguez");
-        Cuenta cuenta1 = new Cuenta("1001", "Ahorros", 150000);
-        Cuenta cuenta2 = new Cuenta("1002", "Corriente", 85000);
-        cliente1.agregarCuenta(cuenta1);
-        cliente1.agregarCuenta(cuenta2);
-        Tarjeta tarjeta1 = new Tarjeta("1111222233334444", "1234");
+    private void cargarDatosDesdeBD() {
+        tarjetas.clear();
+        clientesPorTarjeta.clear();
+        cuentas.clear();
 
-        Cliente cliente2 = new Cliente("2-2222-2222", "Rocío López");
-        Cuenta cuenta3 = new Cuenta("2001", "Ahorros", 250000);
-        cliente2.agregarCuenta(cuenta3);
-        Tarjeta tarjeta2 = new Tarjeta("5555666677778888", "4321");
+        Map<String, Cliente> clientesPorIdentificacion = new LinkedHashMap<>();
 
-        registrarCliente(tarjeta1, cliente1);
-        registrarCliente(tarjeta2, cliente2);
+        String sqlClientes = "SELECT identificacion, nombre, activo FROM clientes";
+        String sqlCuentas = "SELECT numero, tipo, saldo, identificacion_cliente FROM cuentas";
+        String sqlTarjetas = "SELECT numero, pin, bloqueada, vigente, identificacion_cliente FROM tarjetas";
+
+        try (Connection conexion = ConexionBD.obtenerConexion()) {
+
+            try (PreparedStatement ps = conexion.prepareStatement(sqlClientes);
+                 ResultSet rs = ps.executeQuery()) {
+
+                while (rs.next()) {
+                    Cliente cliente = new Cliente(
+                            rs.getString("identificacion"),
+                            rs.getString("nombre"),
+                            rs.getBoolean("activo")
+                    );
+
+                    clientesPorIdentificacion.put(cliente.getIdentificacion(), cliente);
+                }
+            }
+
+            try (PreparedStatement ps = conexion.prepareStatement(sqlCuentas);
+                 ResultSet rs = ps.executeQuery()) {
+
+                while (rs.next()) {
+                    Cuenta cuenta = new Cuenta(
+                            rs.getString("numero"),
+                            rs.getString("tipo"),
+                            rs.getDouble("saldo")
+                    );
+
+                    String identificacion = rs.getString("identificacion_cliente");
+                    Cliente cliente = clientesPorIdentificacion.get(identificacion);
+
+                    if (cliente != null) {
+                        cliente.agregarCuenta(cuenta);
+                        cuentas.put(cuenta.getNumero(), cuenta);
+                    }
+                }
+            }
+
+            try (PreparedStatement ps = conexion.prepareStatement(sqlTarjetas);
+                 ResultSet rs = ps.executeQuery()) {
+
+                while (rs.next()) {
+                    Tarjeta tarjeta = new Tarjeta(
+                            rs.getString("numero"),
+                            rs.getString("pin"),
+                            rs.getBoolean("bloqueada"),
+                            rs.getBoolean("vigente")
+                    );
+
+                    String identificacion = rs.getString("identificacion_cliente");
+                    Cliente cliente = clientesPorIdentificacion.get(identificacion);
+
+                    if (cliente != null) {
+                        tarjetas.put(tarjeta.getNumero(), tarjeta);
+                        clientesPorTarjeta.put(tarjeta.getNumero(), cliente);
+                    }
+                }
+            }
+
+            cargarHistorialDesdeBD(conexion);
+
+            System.out.println("Datos e historial cargados desde MySQL correctamente.");
+
+        } catch (SQLException e) {
+            throw new IllegalStateException("No fue posible cargar los datos desde MySQL.", e);
+        }
+    }
+
+    private void cargarHistorialDesdeBD(Connection conexion) throws SQLException {
+        String sql = "SELECT id, tipo, monto, estado, fecha_hora, cuenta_origen, cuenta_destino "
+                + "FROM transacciones ORDER BY fecha_hora, id";
+
+        try (PreparedStatement ps = conexion.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+
+            while (rs.next()) {
+                Cuenta cuentaOrigen = cuentas.get(rs.getString("cuenta_origen"));
+
+                // Si la cuenta ya no existe, no podemos asociar el movimiento al historial.
+                if (cuentaOrigen == null) {
+                    continue;
+                }
+
+                String numeroDestino = rs.getString("cuenta_destino");
+                Cuenta cuentaDestino = numeroDestino == null ? null : cuentas.get(numeroDestino);
+
+                Timestamp timestamp = rs.getTimestamp("fecha_hora");
+
+                TransaccionHistorial transaccion = new TransaccionHistorial(
+                        rs.getInt("id"),
+                        timestamp.toLocalDateTime(),
+                        rs.getDouble("monto"),
+                        rs.getString("estado"),
+                        rs.getString("tipo"),
+                        cuentaOrigen,
+                        cuentaDestino
+                );
+
+                // Mantiene el mismo comportamiento del proyecto original:
+                // el historial se muestra en la cuenta que originó la operación.
+                cuentaOrigen.agregarTransaccion(transaccion);
+            }
+        }
+    }
+
+    public ResultadoOperacion procesarDeposito(Cuenta cuenta, double monto) {
+        return ejecutarTransaccionPersistente(new Deposito(cuenta, monto), null);
+    }
+
+    public ResultadoOperacion procesarRetiro(Cuenta cuenta, double monto) {
+        return ejecutarTransaccionPersistente(new Retiro(cuenta, monto), null);
+    }
+
+    public ResultadoOperacion procesarTransferencia(Cuenta cuentaOrigen, Cuenta cuentaDestino, double monto) {
+        return ejecutarTransaccionPersistente(
+                new Transferencia(cuentaOrigen, cuentaDestino, monto),
+                cuentaDestino
+        );
+    }
+
+    private ResultadoOperacion ejecutarTransaccionPersistente(Transaccion transaccion, Cuenta cuentaDestino) {
+        if (transaccion == null || transaccion.cuentaOrigen == null) {
+            return new ResultadoOperacion(false, "Primero debe seleccionar una cuenta.");
+        }
+
+        if (!transaccion.validar()) {
+            transaccion.estado = "RECHAZADA";
+
+            try (Connection conexion = ConexionBD.obtenerConexion()) {
+                int idGenerado = insertarTransaccion(conexion, transaccion, cuentaDestino, "RECHAZADA");
+                transaccion.id = idGenerado;
+            } catch (SQLException e) {
+                e.printStackTrace();
+                transaccion.cuentaOrigen.agregarTransaccion(transaccion);
+                return new ResultadoOperacion(
+                        false,
+                        "Operación rechazada: " + transaccion.getTipo()
+                        + "\nNo fue posible guardar el intento en MySQL: " + e.getMessage()
+                );
+            }
+
+            transaccion.cuentaOrigen.agregarTransaccion(transaccion);
+            return new ResultadoOperacion(false, "Operación rechazada: " + transaccion.getTipo());
+        }
+
+        try (Connection conexion = ConexionBD.obtenerConexion()) {
+            conexion.setAutoCommit(false);
+
+            try {
+                if (transaccion instanceof Deposito) {
+                    actualizarSaldoDeposito(conexion, transaccion.cuentaOrigen, transaccion.monto);
+
+                } else if (transaccion instanceof Retiro) {
+                    actualizarSaldoRetiro(conexion, transaccion.cuentaOrigen, transaccion.monto);
+
+                } else if (transaccion instanceof Transferencia) {
+                    actualizarSaldoTransferencia(
+                            conexion,
+                            transaccion.cuentaOrigen,
+                            cuentaDestino,
+                            transaccion.monto
+                    );
+
+                } else {
+                    throw new SQLException("Tipo de transacción no soportado.");
+                }
+
+                int idGenerado = insertarTransaccion(
+                        conexion,
+                        transaccion,
+                        cuentaDestino,
+                        "APROBADA"
+                );
+
+                conexion.commit();
+
+                // El saldo en memoria se cambia únicamente después del COMMIT exitoso.
+                transaccion.aplicar();
+                transaccion.estado = "APROBADA";
+                transaccion.id = idGenerado;
+                transaccion.cuentaOrigen.agregarTransaccion(transaccion);
+
+                return new ResultadoOperacion(true, transaccion.generarComprobante());
+
+            } catch (SQLException e) {
+                conexion.rollback();
+                throw e;
+            }
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return new ResultadoOperacion(
+                    false,
+                    "No se pudo procesar la operación en MySQL: " + e.getMessage()
+            );
+        }
+    }
+
+    private void actualizarSaldoDeposito(Connection conexion, Cuenta cuenta, double monto)
+            throws SQLException {
+
+        String sql = "UPDATE cuentas SET saldo = saldo + ? WHERE numero = ?";
+
+        try (PreparedStatement ps = conexion.prepareStatement(sql)) {
+            ps.setDouble(1, monto);
+            ps.setString(2, cuenta.getNumero());
+
+            if (ps.executeUpdate() != 1) {
+                throw new SQLException("No se encontró la cuenta del depósito.");
+            }
+        }
+    }
+
+    private void actualizarSaldoRetiro(Connection conexion, Cuenta cuenta, double monto)
+            throws SQLException {
+
+        String sql = "UPDATE cuentas SET saldo = saldo - ? "
+                + "WHERE numero = ? AND saldo >= ?";
+
+        try (PreparedStatement ps = conexion.prepareStatement(sql)) {
+            ps.setDouble(1, monto);
+            ps.setString(2, cuenta.getNumero());
+            ps.setDouble(3, monto);
+
+            if (ps.executeUpdate() != 1) {
+                throw new SQLException("Saldo insuficiente o cuenta inexistente.");
+            }
+        }
+    }
+
+    private void actualizarSaldoTransferencia(
+            Connection conexion,
+            Cuenta cuentaOrigen,
+            Cuenta cuentaDestino,
+            double monto
+    ) throws SQLException {
+
+        if (cuentaDestino == null) {
+            throw new SQLException("La cuenta destino no existe.");
+        }
+
+        String sqlDebitar = "UPDATE cuentas SET saldo = saldo - ? "
+                + "WHERE numero = ? AND saldo >= ?";
+
+        String sqlAcreditar = "UPDATE cuentas SET saldo = saldo + ? WHERE numero = ?";
+
+        try (PreparedStatement ps = conexion.prepareStatement(sqlDebitar)) {
+            ps.setDouble(1, monto);
+            ps.setString(2, cuentaOrigen.getNumero());
+            ps.setDouble(3, monto);
+
+            if (ps.executeUpdate() != 1) {
+                throw new SQLException("Saldo insuficiente en la cuenta origen.");
+            }
+        }
+
+        try (PreparedStatement ps = conexion.prepareStatement(sqlAcreditar)) {
+            ps.setDouble(1, monto);
+            ps.setString(2, cuentaDestino.getNumero());
+
+            if (ps.executeUpdate() != 1) {
+                throw new SQLException("No se encontró la cuenta destino.");
+            }
+        }
+    }
+
+    private int insertarTransaccion(
+            Connection conexion,
+            Transaccion transaccion,
+            Cuenta cuentaDestino,
+            String estado
+    ) throws SQLException {
+
+        String sql = "INSERT INTO transacciones "
+                + "(tipo, monto, estado, fecha_hora, cuenta_origen, cuenta_destino) "
+                + "VALUES (?, ?, ?, ?, ?, ?)";
+
+        try (PreparedStatement ps = conexion.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+            ps.setString(1, transaccion.getTipo());
+            ps.setDouble(2, transaccion.monto);
+            ps.setString(3, estado);
+            ps.setTimestamp(4, Timestamp.valueOf(transaccion.fechaHora));
+            ps.setString(5, transaccion.cuentaOrigen.getNumero());
+
+            if (cuentaDestino == null) {
+                ps.setNull(6, Types.VARCHAR);
+            } else {
+                ps.setString(6, cuentaDestino.getNumero());
+            }
+
+            ps.executeUpdate();
+
+            try (ResultSet keys = ps.getGeneratedKeys()) {
+                if (keys.next()) {
+                    return keys.getInt(1);
+                }
+            }
+        }
+
+        throw new SQLException("MySQL no devolvió el ID de la transacción.");
     }
 
     public void registrarCliente(Tarjeta tarjeta, Cliente cliente) {
@@ -155,14 +456,58 @@ public class Banco {
             return new ResultadoOperacion(false, "Ya existe una cuenta registrada con ese número.");
         }
 
-        Cliente cliente = new Cliente(identificacion, nombre);
+        String sqlCliente = "INSERT INTO clientes (identificacion, nombre, activo) VALUES (?, ?, ?)";
+        String sqlTarjeta = "INSERT INTO tarjetas (numero, pin, bloqueada, vigente, identificacion_cliente) VALUES (?, ?, ?, ?, ?)";
+        String sqlCuenta = "INSERT INTO cuentas (numero, tipo, saldo, identificacion_cliente) VALUES (?, ?, ?, ?)";
+
+        try (Connection conexion = ConexionBD.obtenerConexion()) {
+            conexion.setAutoCommit(false);
+
+            try {
+                try (PreparedStatement ps = conexion.prepareStatement(sqlCliente)) {
+                    ps.setString(1, identificacion);
+                    ps.setString(2, nombre);
+                    ps.setBoolean(3, true);
+                    ps.executeUpdate();
+                }
+
+                try (PreparedStatement ps = conexion.prepareStatement(sqlTarjeta)) {
+                    ps.setString(1, numeroTarjeta);
+                    ps.setString(2, pin);
+                    ps.setBoolean(3, false);
+                    ps.setBoolean(4, true);
+                    ps.setString(5, identificacion);
+                    ps.executeUpdate();
+                }
+
+                try (PreparedStatement ps = conexion.prepareStatement(sqlCuenta)) {
+                    ps.setString(1, numeroCuenta);
+                    ps.setString(2, tipoCuenta);
+                    ps.setDouble(3, saldoInicial);
+                    ps.setString(4, identificacion);
+                    ps.executeUpdate();
+                }
+
+                conexion.commit();
+
+            } catch (SQLException e) {
+                conexion.rollback();
+                throw e;
+            }
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return new ResultadoOperacion(false, "No se pudo guardar el usuario en MySQL: " + e.getMessage());
+        }
+
+        Cliente cliente = new Cliente(identificacion, nombre, true);
         Cuenta cuenta = new Cuenta(numeroCuenta, tipoCuenta, saldoInicial);
-        Tarjeta tarjeta = new Tarjeta(numeroTarjeta, pin);
+        Tarjeta tarjeta = new Tarjeta(numeroTarjeta, pin, false, true);
 
         cliente.agregarCuenta(cuenta);
         registrarCliente(tarjeta, cliente);
 
-        return new ResultadoOperacion(true, "Usuario creado correctamente. Ya puede iniciar sesión en el ATM.");
+        return new ResultadoOperacion(true, "Usuario creado correctamente y guardado en MySQL.");
     }
 
     public ResultadoOperacion actualizarUsuario(
@@ -189,15 +534,50 @@ public class Banco {
             return new ResultadoOperacion(false, "El nuevo PIN debe tener exactamente 4 números.");
         }
 
+        Tarjeta tarjeta = obtenerTarjetaPorIdentificacion(identificacion);
+
+        String sqlCliente = "UPDATE clientes SET nombre = ?, activo = ? WHERE identificacion = ?";
+        String sqlPin = "UPDATE tarjetas SET pin = ? WHERE numero = ?";
+
+        try (Connection conexion = ConexionBD.obtenerConexion()) {
+            conexion.setAutoCommit(false);
+
+            try {
+                try (PreparedStatement ps = conexion.prepareStatement(sqlCliente)) {
+                    ps.setString(1, nuevoNombre);
+                    ps.setBoolean(2, activo);
+                    ps.setString(3, identificacion);
+                    ps.executeUpdate();
+                }
+
+                if (tarjeta != null && !nuevoPin.isEmpty()) {
+                    try (PreparedStatement ps = conexion.prepareStatement(sqlPin)) {
+                        ps.setString(1, nuevoPin);
+                        ps.setString(2, tarjeta.getNumero());
+                        ps.executeUpdate();
+                    }
+                }
+
+                conexion.commit();
+
+            } catch (SQLException e) {
+                conexion.rollback();
+                throw e;
+            }
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return new ResultadoOperacion(false, "No se pudo actualizar el usuario en MySQL: " + e.getMessage());
+        }
+
         cliente.setNombre(nuevoNombre);
         cliente.setActivo(activo);
 
-        Tarjeta tarjeta = obtenerTarjetaPorIdentificacion(identificacion);
         if (tarjeta != null && !nuevoPin.isEmpty()) {
             tarjeta.setPin(nuevoPin);
         }
 
-        return new ResultadoOperacion(true, "Usuario actualizado correctamente.");
+        return new ResultadoOperacion(true, "Usuario actualizado correctamente en MySQL.");
     }
 
     public ResultadoOperacion desbloquearTarjetaPorIdentificacion(String identificacion) {
@@ -207,8 +587,44 @@ public class Banco {
             return new ResultadoOperacion(false, "No se encontró la tarjeta del usuario.");
         }
 
+        String sql = "UPDATE tarjetas SET bloqueada = FALSE WHERE numero = ?";
+
+        try (Connection conexion = ConexionBD.obtenerConexion();
+             PreparedStatement ps = conexion.prepareStatement(sql)) {
+
+            ps.setString(1, tarjeta.getNumero());
+            ps.executeUpdate();
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return new ResultadoOperacion(false, "No se pudo desbloquear la tarjeta en MySQL: " + e.getMessage());
+        }
+
         tarjeta.desbloquear();
         return new ResultadoOperacion(true, "Tarjeta desbloqueada correctamente.");
+    }
+
+    public ResultadoOperacion guardarBloqueoTarjeta(String numeroTarjeta, boolean bloqueada) {
+        String sql = "UPDATE tarjetas SET bloqueada = ? WHERE numero = ?";
+
+        try (Connection conexion = ConexionBD.obtenerConexion();
+             PreparedStatement ps = conexion.prepareStatement(sql)) {
+
+            ps.setBoolean(1, bloqueada);
+            ps.setString(2, numeroTarjeta);
+
+            int filas = ps.executeUpdate();
+
+            if (filas == 0) {
+                return new ResultadoOperacion(false, "No se encontró la tarjeta para actualizar su bloqueo.");
+            }
+
+            return new ResultadoOperacion(true, "Estado de bloqueo actualizado.");
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return new ResultadoOperacion(false, "No se pudo guardar el bloqueo de la tarjeta: " + e.getMessage());
+        }
     }
 
     public ResultadoOperacion eliminarUsuario(String identificacion) {
@@ -218,6 +634,40 @@ public class Banco {
 
         if (cliente == null) {
             return new ResultadoOperacion(false, "No se encontró el usuario seleccionado.");
+        }
+
+        String sqlEliminarTransacciones =
+                "DELETE FROM transacciones "
+                + "WHERE cuenta_origen IN (SELECT numero FROM cuentas WHERE identificacion_cliente = ?) "
+                + "OR cuenta_destino IN (SELECT numero FROM cuentas WHERE identificacion_cliente = ?)";
+
+        String sqlEliminarCliente = "DELETE FROM clientes WHERE identificacion = ?";
+
+        try (Connection conexion = ConexionBD.obtenerConexion()) {
+            conexion.setAutoCommit(false);
+
+            try {
+                try (PreparedStatement ps = conexion.prepareStatement(sqlEliminarTransacciones)) {
+                    ps.setString(1, identificacion);
+                    ps.setString(2, identificacion);
+                    ps.executeUpdate();
+                }
+
+                try (PreparedStatement ps = conexion.prepareStatement(sqlEliminarCliente)) {
+                    ps.setString(1, identificacion);
+                    ps.executeUpdate();
+                }
+
+                conexion.commit();
+
+            } catch (SQLException e) {
+                conexion.rollback();
+                throw e;
+            }
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return new ResultadoOperacion(false, "No se pudo eliminar el usuario de MySQL: " + e.getMessage());
         }
 
         String numeroTarjeta = obtenerNumeroTarjetaPorIdentificacion(identificacion);
@@ -231,7 +681,7 @@ public class Banco {
             cuentas.remove(cuenta.getNumero());
         }
 
-        return new ResultadoOperacion(true, "Usuario eliminado correctamente.");
+        return new ResultadoOperacion(true, "Usuario eliminado correctamente de MySQL.");
     }
 
     public Cliente buscarClientePorIdentificacion(String identificacion) {
@@ -248,3 +698,4 @@ public class Banco {
         return texto == null ? "" : texto.trim();
     }
 }
+
