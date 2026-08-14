@@ -10,6 +10,7 @@ public class Transferencia extends Transaccion {
 
     @Override
     public boolean validar() {
+        // no se puede transferir a la misma cuenta ni superar el saldo disponible
         return cuentaOrigen != null
                 && cuentaDestino != null
                 && monto > 0

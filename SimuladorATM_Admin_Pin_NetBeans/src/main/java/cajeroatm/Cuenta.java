@@ -20,12 +20,14 @@ public class Cuenta {
         return saldo;
     }
 
+    // suma al saldo (depositos), false si el monto no es valido
     public boolean acreditar(double monto) {
         if (monto <= 0) return false;
         saldo += monto;
         return true;
     }
 
+    // resta del saldo (retiros/transferencias), no deja dejar el saldo negativo
     public boolean debitar(double monto) {
         if (monto <= 0 || monto > saldo) return false;
         saldo -= monto;

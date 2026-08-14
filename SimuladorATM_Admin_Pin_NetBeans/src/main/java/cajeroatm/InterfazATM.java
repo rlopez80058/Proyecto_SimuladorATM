@@ -33,13 +33,15 @@ import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.border.EmptyBorder;
 
+// Ventana principal del cajero. Usa CardLayout para cambiar entre pantalla de login y menu
+// sin abrir ventanas nuevas (como un cajero real que solo tiene una pantalla).
 public class InterfazATM extends JFrame {
 
     private Banco banco;
     private CajeroAutomatico cajero;
 
     private CardLayout cardLayout;
-    private JPanel pantallaATM;
+    private JPanel pantallaATM; // contiene las dos "cards": login y menu
 
     private JTextField txtTarjeta;
     private JPasswordField txtPin;
@@ -163,6 +165,7 @@ public class InterfazATM extends JFrame {
         pantallaATM.setLayout(cardLayout);
         pantallaATM.setBackground(COLOR_PANTALLA);
 
+        // las dos pantallas se crean ambas al inicio, cardLayout solo muestra/oculta, no las recrea
         pantallaATM.add(crearPantallaLogin(), "login");
         pantallaATM.add(crearPantallaMenu(), "menu");
 
@@ -457,6 +460,8 @@ public class InterfazATM extends JFrame {
         return panel;
     }
 
+    // teclado numerico simulado en pantalla, escribe sobre el campo que tenga el foco (campoActivo)
+    // los botones vacios de en medio son solo para que quede parecido a un cajero real (0-9)
     private JPanel crearTecladoNumerico() {
         JPanel contenedorTeclado = new JPanel(new BorderLayout(12, 0));
         contenedorTeclado.setOpaque(false);
@@ -603,6 +608,7 @@ public class InterfazATM extends JFrame {
         return boton;
     }
 
+    // se llama tanto desde el boton INGRESAR como desde el teclado numerico (ACEPTAR en login)
     private void iniciarSesion() {
         String tarjeta = txtTarjeta.getText().trim();
         String pin = new String(txtPin.getPassword()).trim();
@@ -618,13 +624,14 @@ public class InterfazATM extends JFrame {
         if (resultado.isExito()) {
             lblBienvenida.setText("Bienvenido(a), " + cajero.getClienteActual().getNombre());
 
+            // llena el combo con las cuentas del cliente que acaba de entrar
             cmbCuentas.setModel(new DefaultComboBoxModel<>(
                     cajero.obtenerCuentasCliente().toArray(new Cuenta[0])
             ));
 
             if (cmbCuentas.getItemCount() > 0) {
                 cmbCuentas.setSelectedIndex(0);
-                obtenerCuentaSeleccionada();
+                obtenerCuentaSeleccionada(); // deja la primera cuenta ya seleccionada en el cajero
             }
 
             txtSalida.setText(
@@ -643,6 +650,7 @@ public class InterfazATM extends JFrame {
         }
     }
 
+    // chequeo rapido que se repite antes de cada operacion (retirar, depositar, etc)
     private boolean validarSesionActiva() {
         if (!"menu".equals(pantallaActual) || cmbCuentas == null || cmbCuentas.getSelectedItem() == null) {
             mostrarMensaje("Primero debe iniciar sesión y seleccionar una cuenta.");
@@ -652,6 +660,7 @@ public class InterfazATM extends JFrame {
         return true;
     }
 
+    // toma lo que esta elegido en el combo y se lo pasa al objeto CajeroAutomatico
     private Cuenta obtenerCuentaSeleccionada() {
         Cuenta cuenta = (Cuenta) cmbCuentas.getSelectedItem();
 
@@ -776,6 +785,9 @@ public class InterfazATM extends JFrame {
         lblEstado.setText("Historial actualizado.");
     }
 
+    // popup generico para pedir un monto, se usa en retirar/depositar/transferir
+    // devuelve null si el usuario cancelo o si el numero no era valido (asi el que llama
+    // solo necesita revisar "if (monto == null) return;")
     private Double pedirMonto(String mensaje) {
         String texto = JOptionPane.showInputDialog(
                 this,
@@ -803,6 +815,9 @@ public class InterfazATM extends JFrame {
         }
     }
 
+    // este metodo hace dos cosas distintas dependiendo de en que pantalla este:
+    // si esta en el menu, cierra sesion y vuelve al login. Si esta en el login, pregunta si quiere salir del programa.
+    // (es el mismo boton "SALIR" en las dos pantallas, por eso el if)
     private void cerrarSesion() {
         if ("menu".equals(pantallaActual)) {
             cajero.cerrarSesion();
@@ -865,6 +880,7 @@ public class InterfazATM extends JFrame {
         }
     }
 
+    // pide el pin de admin (hardcodeado arriba en PIN_ADMIN) antes de dejar entrar al panel de gestion
     private void abrirAdminUsuarios() {
         JPasswordField campoPinAdmin = new JPasswordField();
         campoPinAdmin.setFont(new Font("Segoe UI", Font.PLAIN, 16));
@@ -919,6 +935,7 @@ public class InterfazATM extends JFrame {
         });
     }
 
+    // el teclado en pantalla solo funciona en login (tarjeta/pin), en el menu no hace nada
     private void escribirNumero(String numero) {
         if (!"login".equals(pantallaActual)) {
             return;
@@ -950,6 +967,8 @@ public class InterfazATM extends JFrame {
         campoActivo.requestFocusInWindow();
     }
 
+    // el boton ACEPTAR del teclado cambia de funcion segun la pantalla:
+    // en login hace login, en el menu consulta el saldo (para que siempre haga algo util)
     private void aceptarTeclado() {
         if ("login".equals(pantallaActual)) {
             iniciarSesion();

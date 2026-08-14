@@ -7,7 +7,7 @@ public class Deposito extends Transaccion {
 
     @Override
     public boolean validar() {
-        return cuentaOrigen != null && monto > 0;
+        return cuentaOrigen != null && monto > 0; // deposito no tiene mas restricciones que el monto
     }
 
     @Override

@@ -18,6 +18,7 @@ public class Tarjeta {
         this.vigente = vigente;
     }
 
+    // true solo si el pin coincide Y la tarjeta no esta bloqueada ni vencida
     public boolean verificarPIN(String pinIngresado) {
         return !bloqueada && vigente && pin.equals(pinIngresado);
     }

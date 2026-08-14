@@ -1,13 +1,15 @@
 package cajeroatm;
 
+// Maneja el estado del login (cliente logueado, cuenta elegida, intentos de pin, etc)
 public class Sesion {
 
     private Cliente clienteActual;
     private Tarjeta tarjetaActual;
     private Cuenta cuentaSeleccionada;
-    private int intentosPIN;
+    private int intentosPIN; // se reinicia cada vez que entra bien o cuando se llama finalizar()
     private boolean autenticada;
 
+    // valida el pin y bloquea la tarjeta despues de 3 intentos fallidos (como un cajero real)
     public ResultadoOperacion validarPIN(Tarjeta tarjeta, Cliente cliente, String pin) {
         if (tarjeta == null || cliente == null) {
             return new ResultadoOperacion(false, "La tarjeta no existe.");
@@ -35,6 +37,8 @@ public class Sesion {
 
         intentosPIN++;
         if (intentosPIN >= 3) {
+            // esto solo bloquea el objeto en memoria, quien lo guarda en la BD
+            // es CajeroAutomatico.iniciarSesion (llama a banco.guardarBloqueoTarjeta)
             tarjeta.bloquear();
             return new ResultadoOperacion(false, "PIN incorrecto. La tarjeta fue bloqueada por 3 intentos fallidos.");
         }

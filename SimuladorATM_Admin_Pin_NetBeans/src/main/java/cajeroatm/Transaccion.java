@@ -3,6 +3,9 @@ package cajeroatm;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
+// Clase base para Deposito/Retiro/Transferencia, cada una implementa su propia validacion
+// Nota: el id que se pone aqui con el consecutivo es temporal, en Banco.java se sobreescribe
+// con el id real que devuelve MySQL despues del INSERT (por eso lo de "consecutivo" casi no importa)
 public abstract class Transaccion {
     private static int consecutivo = 1;
     protected int id;
@@ -34,10 +37,12 @@ public abstract class Transaccion {
         }
     }
 
-    public abstract boolean validar();
-    protected abstract void aplicar();
+    public abstract boolean validar();   // revisa si la operacion se puede hacer (saldo, montos, etc)
+    protected abstract void aplicar();    // hace el cambio real sobre la cuenta (solo en memoria)
     public abstract String getTipo();
 
+    // Este metodo casi no se usa ya, Banco.ejecutarTransaccionPersistente hace lo mismo
+    // pero contra la base de datos. Se dejo por si se necesita probar sin BD.
     public ResultadoOperacion ejecutar() {
         if (!validar()) {
             estado = "RECHAZADA";

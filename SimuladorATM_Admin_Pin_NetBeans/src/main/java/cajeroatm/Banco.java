@@ -12,8 +12,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+// Esta es la clase que habla con MySQL. Todo lo que sea leer/guardar datos pasa por aca,
+// las demas clases (Cuenta, Cliente, etc) son solo el modelo en memoria.
 public class Banco {
 
+    // se guardan en memoria como cache de lo que hay en la BD, se recargan al abrir el programa
     private Map<String, Tarjeta> tarjetas;
     private Map<String, Cliente> clientesPorTarjeta;
     private Map<String, Cuenta> cuentas;
@@ -22,16 +25,19 @@ public class Banco {
         tarjetas = new LinkedHashMap<>();
         clientesPorTarjeta = new LinkedHashMap<>();
         cuentas = new LinkedHashMap<>();
-        cargarDatosDesdeBD();
+        cargarDatosDesdeBD(); // si esto falla el programa no arranca (ver el throw mas abajo)
     }
 
+    // trae todo de MySQL (clientes, cuentas, tarjetas e historial) y arma los mapas en memoria
     private void cargarDatosDesdeBD() {
         tarjetas.clear();
         clientesPorTarjeta.clear();
         cuentas.clear();
 
+        // mapa auxiliar solo para poder enlazar cuentas/tarjetas con su cliente mientras se cargan
         Map<String, Cliente> clientesPorIdentificacion = new LinkedHashMap<>();
 
+        // el orden importa: primero clientes, porque cuentas y tarjetas dependen de ellos
         String sqlClientes = "SELECT identificacion, nombre, activo FROM clientes";
         String sqlCuentas = "SELECT numero, tipo, saldo, identificacion_cliente FROM cuentas";
         String sqlTarjetas = "SELECT numero, pin, bloqueada, vigente, identificacion_cliente FROM tarjetas";
@@ -102,6 +108,8 @@ public class Banco {
         }
     }
 
+    // reconstruye el historial de movimientos usando TransaccionHistorial
+    // (esa clase no vuelve a aplicar el movimiento, solo sirve para mostrarlo)
     private void cargarHistorialDesdeBD(Connection conexion) throws SQLException {
         String sql = "SELECT id, tipo, monto, estado, fecha_hora, cuenta_origen, cuenta_destino "
                 + "FROM transacciones ORDER BY fecha_hora, id";
@@ -154,11 +162,16 @@ public class Banco {
         );
     }
 
+    // Este es el metodo central de todo: valida, actualiza la BD y si sale bien recien ahi
+    // actualiza el saldo en memoria. Usa commit/rollback para que si algo falla a la mitad
+    // (ej. se cae la conexion) no quede el saldo de una cuenta actualizado y el de la otra no.
     private ResultadoOperacion ejecutarTransaccionPersistente(Transaccion transaccion, Cuenta cuentaDestino) {
         if (transaccion == null || transaccion.cuentaOrigen == null) {
             return new ResultadoOperacion(false, "Primero debe seleccionar una cuenta.");
         }
 
+        // si no pasa validar() (saldo insuficiente, monto invalido, etc) igual se guarda
+        // el intento en la BD como RECHAZADA, para que quede en el historial
         if (!transaccion.validar()) {
             transaccion.estado = "RECHAZADA";
 
@@ -179,10 +192,13 @@ public class Banco {
             return new ResultadoOperacion(false, "Operación rechazada: " + transaccion.getTipo());
         }
 
+        // autoCommit en false porque son varias sentencias (update de saldo + insert del
+        // movimiento) y necesitamos que se apliquen juntas o ninguna
         try (Connection conexion = ConexionBD.obtenerConexion()) {
             conexion.setAutoCommit(false);
 
             try {
+                // dependiendo del tipo se actualiza 1 o 2 cuentas, por eso el if
                 if (transaccion instanceof Deposito) {
                     actualizarSaldoDeposito(conexion, transaccion.cuentaOrigen, transaccion.monto);
 
@@ -219,6 +235,7 @@ public class Banco {
                 return new ResultadoOperacion(true, transaccion.generarComprobante());
 
             } catch (SQLException e) {
+                // algo fallo a mitad de camino, se revierte todo lo de este bloque
                 conexion.rollback();
                 throw e;
             }
@@ -250,6 +267,8 @@ public class Banco {
     private void actualizarSaldoRetiro(Connection conexion, Cuenta cuenta, double monto)
             throws SQLException {
 
+        // el "AND saldo >= ?" es a proposito, evita que dos retiros al mismo tiempo dejen
+        // el saldo en negativo (si executeUpdate devuelve 0 es porque no alcanzaba el saldo)
         String sql = "UPDATE cuentas SET saldo = saldo - ? "
                 + "WHERE numero = ? AND saldo >= ?";
 
@@ -275,6 +294,7 @@ public class Banco {
             throw new SQLException("La cuenta destino no existe.");
         }
 
+        // primero se debita la origen y despues se acredita la destino, en la misma transaccion
         String sqlDebitar = "UPDATE cuentas SET saldo = saldo - ? "
                 + "WHERE numero = ? AND saldo >= ?";
 
@@ -300,6 +320,8 @@ public class Banco {
         }
     }
 
+    // guarda el movimiento en la tabla transacciones y devuelve el id autoincrement que genero MySQL
+    // (Statement.RETURN_GENERATED_KEYS es lo que permite leer ese id despues del insert)
     private int insertarTransaccion(
             Connection conexion,
             Transaccion transaccion,
@@ -336,6 +358,7 @@ public class Banco {
         throw new SQLException("MySQL no devolvió el ID de la transacción.");
     }
 
+    // agrega el cliente/tarjeta/cuentas a los mapas en memoria (no toca la BD, eso ya se hizo antes)
     public void registrarCliente(Tarjeta tarjeta, Cliente cliente) {
         tarjetas.put(tarjeta.getNumero(), tarjeta);
         clientesPorTarjeta.put(tarjeta.getNumero(), cliente);
@@ -407,6 +430,8 @@ public class Banco {
         return cuentas.containsKey(numeroCuenta);
     }
 
+    // Crea un cliente + tarjeta + cuenta nuevos, todo junto. Se usa desde el modulo admin.
+    // Son bastantes validaciones seguidas, ojo si se le agrega algo mas revisar que no rompa el orden
     public ResultadoOperacion crearUsuario(
             String identificacion,
             String nombre,
@@ -464,6 +489,7 @@ public class Banco {
             conexion.setAutoCommit(false);
 
             try {
+                // el cliente va primero porque tarjetas y cuentas tienen FK a identificacion_cliente
                 try (PreparedStatement ps = conexion.prepareStatement(sqlCliente)) {
                     ps.setString(1, identificacion);
                     ps.setString(2, nombre);
@@ -510,6 +536,9 @@ public class Banco {
         return new ResultadoOperacion(true, "Usuario creado correctamente y guardado en MySQL.");
     }
 
+    // edita nombre, pin (opcional) y estado activo de un cliente que ya existe.
+    // OJO: no se puede cambiar el numero de tarjeta ni de cuenta desde aca, eso se decidio
+    // asi porque si no habria que migrar el historial de transacciones tambien
     public ResultadoOperacion actualizarUsuario(
             String identificacion,
             String nuevoNombre,
@@ -530,6 +559,7 @@ public class Banco {
             return new ResultadoOperacion(false, "El nombre no puede quedar vacío.");
         }
 
+        // el pin es opcional al editar, si viene vacio se deja el que ya tenia (se valida solo si viene algo)
         if (!nuevoPin.isEmpty() && (nuevoPin.length() != 4 || !nuevoPin.matches("\\d+"))) {
             return new ResultadoOperacion(false, "El nuevo PIN debe tener exactamente 4 números.");
         }
@@ -580,6 +610,7 @@ public class Banco {
         return new ResultadoOperacion(true, "Usuario actualizado correctamente en MySQL.");
     }
 
+    // esto es lo que usa el boton "Desbloquear" del panel admin
     public ResultadoOperacion desbloquearTarjetaPorIdentificacion(String identificacion) {
         Tarjeta tarjeta = obtenerTarjetaPorIdentificacion(identificacion);
 
@@ -604,6 +635,7 @@ public class Banco {
         return new ResultadoOperacion(true, "Tarjeta desbloqueada correctamente.");
     }
 
+    // este se llama tanto para bloquear (3 pines malos) como para desbloquear desde admin
     public ResultadoOperacion guardarBloqueoTarjeta(String numeroTarjeta, boolean bloqueada) {
         String sql = "UPDATE tarjetas SET bloqueada = ? WHERE numero = ?";
 
@@ -636,11 +668,15 @@ public class Banco {
             return new ResultadoOperacion(false, "No se encontró el usuario seleccionado.");
         }
 
+        // hay que borrar las transacciones primero por las FK, si no MySQL tira error de
+        // integridad referencial al querer borrar clientes/cuentas que todavia tienen movimientos
         String sqlEliminarTransacciones =
                 "DELETE FROM transacciones "
                 + "WHERE cuenta_origen IN (SELECT numero FROM cuentas WHERE identificacion_cliente = ?) "
                 + "OR cuenta_destino IN (SELECT numero FROM cuentas WHERE identificacion_cliente = ?)";
 
+        // solo se borra de clientes, cuentas y tarjetas se van solas por el ON DELETE CASCADE
+        // que tiene la tabla en MySQL (si alguien recrea la BD sin eso, esto va a fallar)
         String sqlEliminarCliente = "DELETE FROM clientes WHERE identificacion = ?";
 
         try (Connection conexion = ConexionBD.obtenerConexion()) {
@@ -694,6 +730,7 @@ public class Banco {
         return null;
     }
 
+    // solo para no repetir el null check en cada validacion de arriba
     private String limpiarTexto(String texto) {
         return texto == null ? "" : texto.trim();
     }

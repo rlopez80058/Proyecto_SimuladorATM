@@ -25,6 +25,8 @@ import javax.swing.SwingConstants;
 import javax.swing.border.EmptyBorder;
 import javax.swing.table.DefaultTableModel;
 
+// Ventana aparte para gestionar usuarios (crear, editar, eliminar, desbloquear tarjeta).
+// Se abre desde InterfazATM despues de meter el PIN de admin.
 public class AdminUsuariosFrame extends JFrame {
 
     private Banco banco;
@@ -215,6 +217,7 @@ public class AdminUsuariosFrame extends JFrame {
         return boton;
     }
 
+    // refresca la tabla con lo que hay en el Banco, se llama despues de cada crear/editar/eliminar/desbloquear
     private void cargarTabla() {
         modeloTabla.setRowCount(0);
 
@@ -245,6 +248,9 @@ public class AdminUsuariosFrame extends JFrame {
         }
     }
 
+    // cuando se hace click en una fila de la tabla, llena el formulario con esos datos para editar.
+    // tarjeta/cuenta/saldo se bloquean (setEditable false) porque no se pueden cambiar desde edicion,
+    // por eso se les pone el texto "No editable" en vez de dejarlos en blanco
     private void cargarUsuarioSeleccionado() {
         int fila = tablaUsuarios.getSelectedRow();
 
@@ -266,6 +272,7 @@ public class AdminUsuariosFrame extends JFrame {
         txtSaldo.setText("No editable");
     }
 
+    // boton "Crear", toma todo lo del formulario y lo manda a Banco.crearUsuario (ahi esta toda la validacion real)
     private void crearUsuario() {
         Double saldo = obtenerSaldo();
 
@@ -291,6 +298,7 @@ public class AdminUsuariosFrame extends JFrame {
         }
     }
 
+    // boton "Editar", requiere que ya haya un usuario cargado (viene de cargarUsuarioSeleccionado)
     private void editarUsuario() {
         if (txtIdentificacion.getText().trim().isEmpty()) {
             mostrarMensaje("Seleccione un usuario de la tabla para editar.");
@@ -318,6 +326,7 @@ public class AdminUsuariosFrame extends JFrame {
             return;
         }
 
+        // confirmacion antes de borrar, porque tambien se lleva las tarjetas/cuentas/historial
         int opcion = JOptionPane.showConfirmDialog(
                 this,
                 "¿Seguro que desea eliminar este usuario?\nEsta acción también eliminará sus tarjetas y cuentas.",
@@ -353,6 +362,7 @@ public class AdminUsuariosFrame extends JFrame {
         }
     }
 
+    // valida y convierte el texto del campo saldo a double, con sus mensajes de error
     private Double obtenerSaldo() {
         try {
             String texto = txtSaldo.getText().trim();

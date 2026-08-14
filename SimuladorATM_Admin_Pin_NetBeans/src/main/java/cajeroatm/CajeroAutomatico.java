@@ -2,6 +2,7 @@ package cajeroatm;
 
 import java.util.List;
 
+// Intermediario entre la interfaz (InterfazATM) y el Banco, aca no hay logica de UI ni de SQL
 public class CajeroAutomatico {
     private Banco banco;
     private Sesion sesion;
@@ -19,6 +20,8 @@ public class CajeroAutomatico {
 
         ResultadoOperacion resultado = sesion.validarPIN(tarjeta, cliente, pin);
 
+        // compara antes/despues para saber si fue este intento el que bloqueo la tarjeta,
+        // asi solo se hace el UPDATE cuando realmente cambio el estado (no en cada intento)
         if (tarjeta != null && !estabaBloqueada && tarjeta.estaBloqueada()) {
             ResultadoOperacion guardado = banco.guardarBloqueoTarjeta(numeroTarjeta, true);
 

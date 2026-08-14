@@ -7,6 +7,7 @@ public class Retiro extends Transaccion {
 
     @Override
     public boolean validar() {
+        // no deja retirar mas de lo que hay en la cuenta
         return cuentaOrigen != null && monto > 0 && cuentaOrigen.consultarSaldo() >= monto;
     }
 
